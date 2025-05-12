@@ -1,5 +1,5 @@
 const express = require('express');
-const fs = require('fs');
+const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 const app = express();
@@ -8,38 +8,30 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-const USERS_FILE = 'users.json';
-const JOKES_FILE = 'jokes.json';
+const uri = "mongodb+srv://jokedrop:<CandleWax1!>@<jokedrop-cluster>.mongodb.net/?retryWrites=true&w=majority"; // replace <your-password> and <your-cluster>
+const client = new MongoClient(uri);
+let db, users, jokes;
 
-function loadUsers() {
-  if (!fs.existsSync(USERS_FILE)) return [];
-  return JSON.parse(fs.readFileSync(USERS_FILE));
-}
-
-function saveUsers(users) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-}
-
-function getAllJokes() {
-  if (!fs.existsSync(JOKES_FILE)) return [];
-  return JSON.parse(fs.readFileSync(JOKES_FILE));
-}
-
-function saveJokes(jokes) {
-  fs.writeFileSync(JOKES_FILE, JSON.stringify(jokes, null, 2));
+async function connectDB() {
+  try {
+    await client.connect();
+    db = client.db("jokedrop");
+    users = db.collection("users");
+    jokes = db.collection("jokes");
+    console.log("✅ Connected to MongoDB");
+  } catch (err) {
+    console.error("MongoDB connection error:", err);
+  }
 }
 
 // Register
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
-  const users = loadUsers();
-
-  if (users.find(u => u.email === email)) {
-    return res.status(400).json({ success: false, error: 'User already exists' });
-  }
+  const existing = await users.findOne({ email });
+  if (existing) return res.status(400).json({ success: false, error: 'User already exists' });
 
   const hashed = await bcrypt.hash(password, 10);
-  users.push({
+  await users.insertOne({
     email,
     password: hashed,
     name: "",
@@ -50,167 +42,119 @@ app.post('/register', async (req, res) => {
     followers: [],
     following: []
   });
-
-  saveUsers(users);
   res.json({ success: true });
 });
 
 // Login
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  const users = loadUsers();
-  const user = users.find(u => u.email === email);
-
+  const user = await users.findOne({ email });
   if (!user || !(await bcrypt.compare(password, user.password))) {
     return res.status(401).json({ success: false, error: 'Invalid credentials' });
   }
-
   res.json({ success: true });
 });
 
-// Submit Joke
-app.post('/submit', (req, res) => {
+// Submit joke
+app.post('/submit', async (req, res) => {
   const { email, joke } = req.body;
-  if (!email || !joke) {
-    return res.status(400).json({ success: false, error: 'Email and joke are required' });
-  }
-
-  const jokes = getAllJokes();
-  jokes.push({ email, joke, status: 'pending' });
-  saveJokes(jokes);
-
+  if (!email || !joke) return res.status(400).json({ success: false, error: 'Email and joke are required' });
+  await jokes.insertOne({ email, joke, status: 'pending' });
   res.json({ success: true });
 });
 
-// Get jokes for user
-app.get('/jokes', (req, res) => {
+// Get jokes
+app.get('/jokes', async (req, res) => {
   const email = req.query.email;
   if (!email) return res.status(400).json({ success: false, error: 'Email required' });
-
-  const jokes = getAllJokes();
-  const userJokes = jokes.filter(j =>
-    j.email === email && (j.status === 'pending' || j.status === 'approved')
-  );
-
+  const userJokes = await jokes.find({ email, status: { $in: ['pending', 'approved'] } }).toArray();
   res.json({ success: true, jokes: userJokes });
 });
 
-// Get trending jokes
-app.get('/trending', (req, res) => {
-  const jokes = getAllJokes().filter(j => j.status === 'approved');
-  const users = loadUsers();
-  const trending = jokes.slice(-10).reverse().map(joke => {
-    const user = users.find(u => u.email === joke.email);
+// Trending jokes
+app.get('/trending', async (req, res) => {
+  const recent = await jokes.find({ status: 'approved' }).sort({ _id: -1 }).limit(10).toArray();
+  const allUsers = await users.find({}).toArray();
+  const trending = recent.map(joke => {
+    const u = allUsers.find(user => user.email === joke.email);
     return {
       joke: joke.joke,
-      name: user?.privacy?.name && user?.name ? user.name : user?.email || 'Unknown'
+      name: u?.privacy?.name && u?.name ? u.name : u?.email || 'Unknown'
     };
   });
-
   res.json({ success: true, jokes: trending });
 });
 
 // Get profile
-app.get('/profile', (req, res) => {
+app.get('/profile', async (req, res) => {
   const email = req.query.email;
-  if (!email) return res.status(400).json({ success: false, error: 'Email required' });
-
-  const users = loadUsers();
-  const user = users.find(u => u.email === email);
+  const user = await users.findOne({ email });
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
   const { name, location, dob, profilePicture, privacy, followers, following } = user;
   res.json({ success: true, name, location, dob, profilePicture, privacy, followers, following });
 });
 
 // Update profile
-app.post('/profile/update', (req, res) => {
+app.post('/profile/update', async (req, res) => {
   const { email, name, location, dob, profilePicture, privacy } = req.body;
-  if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
-
-  const users = loadUsers();
-  const user = users.find(u => u.email === email);
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
-  user.name = name || user.name || "";
-  user.location = location || user.location || "";
-  user.dob = dob || user.dob || "";
-  user.profilePicture = profilePicture || user.profilePicture || "";
-  user.privacy = {
-    name: privacy?.name ?? user.privacy?.name ?? true,
-    location: privacy?.location ?? user.privacy?.location ?? true,
-    dob: privacy?.dob ?? user.privacy?.dob ?? false
+  const update = {
+    $set: {
+      name: name || "",
+      location: location || "",
+      dob: dob || "",
+      profilePicture: profilePicture || "",
+      privacy: {
+        name: privacy?.name ?? true,
+        location: privacy?.location ?? true,
+        dob: privacy?.dob ?? false
+      }
+    }
   };
-
-  saveUsers(users);
-  res.json({ success: true });
+  const result = await users.updateOne({ email }, update);
+  res.json({ success: result.modifiedCount > 0 });
 });
 
 // Change password
 app.post('/change-password', async (req, res) => {
   const { email, currentPassword, newPassword } = req.body;
-  if (!email || !currentPassword || !newPassword) {
-    return res.status(400).json({ success: false, error: 'All fields required' });
-  }
-
-  const users = loadUsers();
-  const user = users.find(u => u.email === email);
+  const user = await users.findOne({ email });
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
   const match = await bcrypt.compare(currentPassword, user.password);
-  if (!match) return res.status(401).json({ success: false, error: 'Incorrect current password' });
-
+  if (!match) return res.status(401).json({ success: false, error: 'Incorrect password' });
   const hashed = await bcrypt.hash(newPassword, 10);
-  user.password = hashed;
-  saveUsers(users);
-
+  await users.updateOne({ email }, { $set: { password: hashed } });
   res.json({ success: true });
 });
 
-// Follow a user
-app.post('/follow', (req, res) => {
+// Follow user
+app.post('/follow', async (req, res) => {
   const { follower, target } = req.body;
-  if (!follower || !target || follower === target) {
-    return res.status(400).json({ success: false, error: 'Invalid follow data' });
-  }
-
-  const users = loadUsers();
-  const fromUser = users.find(u => u.email === follower);
-  const toUser = users.find(u => u.email === target);
-
-  if (!fromUser || !toUser) {
-    return res.status(404).json({ success: false, error: 'User not found' });
-  }
-
-  fromUser.following = fromUser.following || [];
-  toUser.followers = toUser.followers || [];
-
-  if (!fromUser.following.includes(target)) fromUser.following.push(target);
-  if (!toUser.followers.includes(follower)) toUser.followers.push(follower);
-
-  saveUsers(users);
+  if (!follower || !target || follower === target) return res.status(400).json({ success: false });
+  const from = await users.findOne({ email: follower });
+  const to = await users.findOne({ email: target });
+  if (!from || !to) return res.status(404).json({ success: false });
+  await users.updateOne({ email: follower }, { $addToSet: { following: target } });
+  await users.updateOne({ email: target }, { $addToSet: { followers: follower } });
   res.json({ success: true });
 });
 
-// Suggested users to follow
-app.get('/users/suggestions', (req, res) => {
-  const { email } = req.query;
-  const users = loadUsers();
-  const me = users.find(u => u.email === email);
-
-  if (!me) return res.status(404).json({ success: false, error: 'User not found' });
-
-  const following = new Set(me.following || []);
-  const suggestions = users
-    .filter(u => u.email !== email && !following.has(u.email))
-    .map(u => ({
-      email: u.email,
-      name: u.privacy?.name && u.name ? u.name : ""
-    }));
-
-  res.json({ success: true, users: suggestions });
+// Suggestions
+app.get('/users/suggestions', async (req, res) => {
+  const email = req.query.email;
+  const me = await users.findOne({ email });
+  if (!me) return res.status(404).json({ success: false });
+  const suggestions = await users.find({
+    email: { $ne: email, $nin: me.following || [] }
+  }).toArray();
+  const usersList = suggestions.map(u => ({
+    email: u.email,
+    name: u.privacy?.name && u.name ? u.name : ""
+  }));
+  res.json({ success: true, users: usersList });
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Joke Drop backend running on port ${PORT}`);
+connectDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
+  });
 });
