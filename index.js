@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // MongoDB connection
-mongoose.connect('your-mongodb-connection-string', {
+mongoose.connect(mongodb+srv://jokedrop:connorrees@jokedrop-cluster.4zcbnju.mongodb.net/?retryWrites=true&w=majority&appName=jokedrop-cluster , {
   useNewUrlParser: true,
   useUnifiedTopology: true
 }).then(() => console.log('✅ Connected to MongoDB'))
