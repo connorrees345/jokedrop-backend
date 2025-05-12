@@ -1,9 +1,9 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
-const multer = require('multer');
-const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const multer = require('multer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Set up multer for image uploads
+// Multer setup for image upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, 'uploads/');
@@ -23,15 +23,13 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// MongoDB URI (replace with your own)
-const mongoURI = "your_mongo_connection_string";
+// MongoDB URI (using MongoDB Atlas connection string)
+const mongoURI = "mongodb+srv://jokedrop:connorrees@cluster0.mongodb.net/jokedrop?retryWrites=true&w=majority";
 mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("MongoDB Connected"))
   .catch(err => console.log(err));
 
-// Define Mongoose models
-
-// User Model
+// Define Models (User, Joke)
 const userSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -44,13 +42,10 @@ const userSchema = new mongoose.Schema({
     location: { type: Boolean, default: true },
     dob: { type: Boolean, default: false },
   },
-  followers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  following: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
 });
 
 const User = mongoose.model('User', userSchema);
 
-// Joke Model
 const jokeSchema = new mongoose.Schema({
   email: { type: String, required: true },
   joke: { type: String, required: true },
@@ -60,7 +55,9 @@ const jokeSchema = new mongoose.Schema({
 
 const Joke = mongoose.model('Joke', jokeSchema);
 
-// Register User
+// Test password: "connorrees" (for testing only)
+
+// User Registration Route
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
   const existingUser = await User.findOne({ email });
@@ -70,16 +67,13 @@ app.post('/register', async (req, res) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
-  const newUser = new User({
-    email,
-    password: hashedPassword,
-  });
+  const newUser = new User({ email, password: hashedPassword });
 
   await newUser.save();
   res.json({ success: true });
 });
 
-// Login User
+// Login Route
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
@@ -92,7 +86,7 @@ app.post('/login', async (req, res) => {
   res.json({ success: true, token });
 });
 
-// Get Profile
+// Profile Route
 app.get('/profile', async (req, res) => {
   const { email } = req.query;
 
@@ -118,32 +112,29 @@ app.get('/profile', async (req, res) => {
   });
 });
 
-// Update Profile
-app.post('/profile', upload.single('profilePicture'), async (req, res) => {
-  const { email, name, location, dob, privacy } = req.body;
-  const profilePicture = req.file ? req.file.path : undefined;
+// Update Profile Route
+app.post('/profile', async (req, res) => {
+  const { email, name, location, dob, profilePicture, privacy } = req.body;
+  if (!email) return res.status(400).json({ success: false, error: 'Email is required' });
 
   const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  user.name = name || user.name;
-  user.location = location || user.location;
-  user.dob = dob || user.dob;
-  user.profilePicture = profilePicture || user.profilePicture;
+  user.name = name || "";
+  user.location = location || "";
+  user.dob = dob || "";
+  user.profilePicture = profilePicture || "";
   user.privacy = {
-    name: privacy?.name ?? user.privacy.name,
-    location: privacy?.location ?? user.privacy.location,
-    dob: privacy?.dob ?? user.privacy.dob
+    name: privacy?.name ?? true,
+    location: privacy?.location ?? true,
+    dob: privacy?.dob ?? false
   };
 
   await user.save();
   res.json({ success: true });
 });
 
-// Submit Joke
+// Submit Joke Route
 app.post('/submit', async (req, res) => {
   const { email, joke } = req.body;
 
@@ -151,17 +142,12 @@ app.post('/submit', async (req, res) => {
     return res.status(400).json({ error: 'Email and joke are required' });
   }
 
-  const newJoke = new Joke({
-    email,
-    joke,
-    status: 'pending'
-  });
-
+  const newJoke = new Joke({ email, joke, status: 'pending' });
   await newJoke.save();
   res.json({ success: true });
 });
 
-// Get Jokes (by user)
+// Get All Jokes (by user)
 app.get('/jokes', async (req, res) => {
   const { email } = req.query;
 
@@ -174,13 +160,39 @@ app.get('/jokes', async (req, res) => {
   res.json({ success: true, jokes });
 });
 
-// Follow/Unfollow Users
+// Admin Routes for Approving Jokes (for moderation)
+app.post('/approve-joke', async (req, res) => {
+  const { jokeId } = req.body;
+  const joke = await Joke.findById(jokeId);
+
+  if (!joke) {
+    return res.status(404).json({ error: 'Joke not found' });
+  }
+
+  joke.status = 'approved';
+  await joke.save();
+
+  res.json({ success: true });
+});
+
+// Admin Routes for Rejecting Jokes
+app.post('/reject-joke', async (req, res) => {
+  const { jokeId } = req.body;
+  const joke = await Joke.findById(jokeId);
+
+  if (!joke) {
+    return res.status(404).json({ error: 'Joke not found' });
+  }
+
+  joke.status = 'rejected';
+  await joke.save();
+
+  res.json({ success: true });
+});
+
+// Follow System Routes (Follow/Unfollow Users)
 app.post('/follow', async (req, res) => {
   const { follower, target } = req.body;
-
-  if (!follower || !target) {
-    return res.status(400).json({ error: 'Follower and target are required' });
-  }
 
   const user = await User.findOne({ email: follower });
   const targetUser = await User.findOne({ email: target });
@@ -189,24 +201,16 @@ app.post('/follow', async (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  if (user.following.includes(targetUser._id)) {
-    user.following.pull(targetUser._id);
-    targetUser.followers.pull(user._id);
+  // Add to followers and following list
+  if (!user.following.includes(target)) {
+    user.following.push(target);
+    targetUser.followers.push(follower);
+    await user.save();
+    await targetUser.save();
+    res.json({ success: true });
   } else {
-    user.following.push(targetUser._id);
-    targetUser.followers.push(user._id);
+    return res.status(400).json({ error: 'Already following' });
   }
-
-  await user.save();
-  await targetUser.save();
-
-  res.json({ success: true });
-});
-
-// Get Trending Jokes
-app.get('/trending', async (req, res) => {
-  const jokes = await Joke.find({ status: 'approved' }).sort({ createdAt: -1 }).limit(5);
-  res.json({ success: true, jokes });
 });
 
 app.listen(PORT, () => {
