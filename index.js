@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-const uri = "mongodb+srv://jokedrop:<CandleWax1!>@<jokedrop-cluster>.mongodb.net/?retryWrites=true&w=majority"; // replace <your-password> and <your-cluster>
+const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri);
 let db, users, jokes;
 
@@ -24,7 +24,6 @@ async function connectDB() {
   }
 }
 
-// Register
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
   const existing = await users.findOne({ email });
@@ -45,7 +44,6 @@ app.post('/register', async (req, res) => {
   res.json({ success: true });
 });
 
-// Login
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await users.findOne({ email });
@@ -55,7 +53,6 @@ app.post('/login', async (req, res) => {
   res.json({ success: true });
 });
 
-// Submit joke
 app.post('/submit', async (req, res) => {
   const { email, joke } = req.body;
   if (!email || !joke) return res.status(400).json({ success: false, error: 'Email and joke are required' });
@@ -63,7 +60,6 @@ app.post('/submit', async (req, res) => {
   res.json({ success: true });
 });
 
-// Get jokes
 app.get('/jokes', async (req, res) => {
   const email = req.query.email;
   if (!email) return res.status(400).json({ success: false, error: 'Email required' });
@@ -71,7 +67,6 @@ app.get('/jokes', async (req, res) => {
   res.json({ success: true, jokes: userJokes });
 });
 
-// Trending jokes
 app.get('/trending', async (req, res) => {
   const recent = await jokes.find({ status: 'approved' }).sort({ _id: -1 }).limit(10).toArray();
   const allUsers = await users.find({}).toArray();
@@ -85,7 +80,6 @@ app.get('/trending', async (req, res) => {
   res.json({ success: true, jokes: trending });
 });
 
-// Get profile
 app.get('/profile', async (req, res) => {
   const email = req.query.email;
   const user = await users.findOne({ email });
@@ -94,7 +88,6 @@ app.get('/profile', async (req, res) => {
   res.json({ success: true, name, location, dob, profilePicture, privacy, followers, following });
 });
 
-// Update profile
 app.post('/profile/update', async (req, res) => {
   const { email, name, location, dob, profilePicture, privacy } = req.body;
   const update = {
@@ -114,7 +107,6 @@ app.post('/profile/update', async (req, res) => {
   res.json({ success: result.modifiedCount > 0 });
 });
 
-// Change password
 app.post('/change-password', async (req, res) => {
   const { email, currentPassword, newPassword } = req.body;
   const user = await users.findOne({ email });
@@ -126,7 +118,6 @@ app.post('/change-password', async (req, res) => {
   res.json({ success: true });
 });
 
-// Follow user
 app.post('/follow', async (req, res) => {
   const { follower, target } = req.body;
   if (!follower || !target || follower === target) return res.status(400).json({ success: false });
@@ -138,7 +129,6 @@ app.post('/follow', async (req, res) => {
   res.json({ success: true });
 });
 
-// Suggestions
 app.get('/users/suggestions', async (req, res) => {
   const email = req.query.email;
   const me = await users.findOne({ email });
