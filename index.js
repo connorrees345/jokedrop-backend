@@ -1,195 +1,214 @@
-// index.js — complete backend with MongoDB, user auth, profile editing, moderation, jokes
-
 const express = require('express');
 const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+const multer = require('multer');
 const cors = require('cors');
-require('dotenv').config();
-
+const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB error:', err));
-
-// Schemas
-const userSchema = new mongoose.Schema({
-  email: String,
-  password: String,
-  name: String,
-  location: String,
-  dob: String,
-  profilePicture: String,
-  followers: [String],
-  following: [String],
-  privacy: {
-    name: Boolean,
-    location: Boolean,
-    dob: Boolean
-  }
+// Set up multer for image uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  },
 });
+
+const upload = multer({ storage: storage });
+
+// MongoDB URI (replace with your own)
+const mongoURI = "your_mongo_connection_string";
+mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log("MongoDB Connected"))
+  .catch(err => console.log(err));
+
+// Define Mongoose models
+
+// User Model
+const userSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  name: { type: String, default: "" },
+  location: { type: String, default: "" },
+  dob: { type: String, default: "" },
+  profilePicture: { type: String, default: "" },
+  privacy: {
+    name: { type: Boolean, default: true },
+    location: { type: Boolean, default: true },
+    dob: { type: Boolean, default: false },
+  },
+  followers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  following: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
+});
+
+const User = mongoose.model('User', userSchema);
+
+// Joke Model
 const jokeSchema = new mongoose.Schema({
-  email: String,
-  joke: String,
+  email: { type: String, required: true },
+  joke: { type: String, required: true },
   status: { type: String, default: 'pending' },
   createdAt: { type: Date, default: Date.now }
 });
 
-const User = mongoose.model('User', userSchema);
 const Joke = mongoose.model('Joke', jokeSchema);
 
-// Preload admin user for testing
-(async () => {
-  const exists = await User.findOne({ email: 'admin@joke-drop.com' });
-  if (!exists) {
-    await User.create({
-      email: 'admin@joke-drop.com',
-      password: 'connorrees',
-      name: 'Admin',
-      location: '',
-      dob: '',
-      profilePicture: '',
-      followers: [],
-      following: [],
-      privacy: { name: true, location: true, dob: false }
-    });
-    console.log('Test admin user created.');
-  }
-})();
-
-// Register
+// Register User
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ success: false, error: 'Missing fields' });
-  const exists = await User.findOne({ email });
-  if (exists) return res.status(400).json({ success: false, error: 'User exists' });
+  const existingUser = await User.findOne({ email });
 
-  await User.create({ email, password, name: '', location: '', dob: '', followers: [], following: [], privacy: { name: true, location: true, dob: false } });
+  if (existingUser) {
+    return res.status(400).json({ error: 'User already exists' });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const newUser = new User({
+    email,
+    password: hashedPassword,
+  });
+
+  await newUser.save();
   res.json({ success: true });
 });
 
-// Login
+// Login User
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email });
-  if (!user || user.password !== password) return res.status(401).json({ success: false, error: 'Invalid credentials' });
+
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  const token = jwt.sign({ email: user.email, id: user._id }, 'your_secret_key');
+  res.json({ success: true, token });
+});
+
+// Get Profile
+app.get('/profile', async (req, res) => {
+  const { email } = req.query;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  res.json({
+    success: true,
+    profile: {
+      name: user.name,
+      location: user.location,
+      dob: user.dob,
+      profilePicture: user.profilePicture,
+      privacy: user.privacy
+    }
+  });
+});
+
+// Update Profile
+app.post('/profile', upload.single('profilePicture'), async (req, res) => {
+  const { email, name, location, dob, privacy } = req.body;
+  const profilePicture = req.file ? req.file.path : undefined;
+
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  user.name = name || user.name;
+  user.location = location || user.location;
+  user.dob = dob || user.dob;
+  user.profilePicture = profilePicture || user.profilePicture;
+  user.privacy = {
+    name: privacy?.name ?? user.privacy.name,
+    location: privacy?.location ?? user.privacy.location,
+    dob: privacy?.dob ?? user.privacy.dob
+  };
+
+  await user.save();
   res.json({ success: true });
 });
 
-// Submit a joke
+// Submit Joke
 app.post('/submit', async (req, res) => {
   const { email, joke } = req.body;
-  if (!email || !joke) return res.status(400).json({ success: false, error: 'Missing data' });
-  await Joke.create({ email, joke });
+
+  if (!email || !joke) {
+    return res.status(400).json({ error: 'Email and joke are required' });
+  }
+
+  const newJoke = new Joke({
+    email,
+    joke,
+    status: 'pending'
+  });
+
+  await newJoke.save();
   res.json({ success: true });
 });
 
-// Get jokes for user (pending + approved)
+// Get Jokes (by user)
 app.get('/jokes', async (req, res) => {
   const { email } = req.query;
-  if (!email) return res.status(400).json({ success: false, error: 'Missing email' });
-  const jokes = await Joke.find({ email, status: { $in: ['pending', 'approved'] } }).sort({ createdAt: -1 });
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email required' });
+  }
+
+  const jokes = await Joke.find({ email });
+
   res.json({ success: true, jokes });
 });
 
-// Profile GET
-app.get('/profile', async (req, res) => {
-  const { email } = req.query;
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-  const { name, location, dob, profilePicture, privacy, followers, following } = user;
-  res.json({ success: true, name, location, dob, profilePicture, privacy, followers, following });
-});
-
-// Profile POST
-app.post('/profile', async (req, res) => {
-  const { email, name, location, dob, profilePicture, privacy } = req.body;
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-  user.name = name || '';
-  user.location = location || '';
-  user.dob = dob || '';
-  user.profilePicture = profilePicture || '';
-  user.privacy = { name: !!privacy?.name, location: !!privacy?.location, dob: !!privacy?.dob };
-  await user.save();
-  res.json({ success: true });
-});
-
-// Change password
-app.post('/change-password', async (req, res) => {
-  const { email, currentPassword, newPassword } = req.body;
-  const user = await User.findOne({ email });
-  if (!user || user.password !== currentPassword) return res.status(401).json({ success: false, error: 'Wrong password' });
-  user.password = newPassword;
-  await user.save();
-  res.json({ success: true });
-});
-
-// Moderator GET: fetch pending jokes
-app.get('/moderate', async (req, res) => {
-  try {
-    const jokes = await Joke.find({ status: 'pending' }).sort({ createdAt: -1 });
-    res.json({ success: true, jokes });
-  } catch {
-    res.status(500).json({ success: false, error: 'Failed to fetch jokes' });
-  }
-});
-
-// Moderator POST: approve/reject jokes
-app.post('/moderate', async (req, res) => {
-  const { id, action } = req.body;
-  if (!id || !['approved', 'rejected'].includes(action)) return res.status(400).json({ success: false, error: 'Invalid data' });
-  try {
-    await Joke.findByIdAndUpdate(id, { status: action });
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ success: false, error: 'Update failed' });
-  }
-});
-
-// Suggested users
-app.get('/users/suggestions', async (req, res) => {
-  const { email } = req.query;
-  const user = await User.findOne({ email });
-  if (!user) return res.json({ success: false, users: [] });
-  const users = await User.find({ email: { $ne: email }, email: { $nin: user.following } });
-  res.json({ success: true, users });
-});
-
-// Follow a user
+// Follow/Unfollow Users
 app.post('/follow', async (req, res) => {
   const { follower, target } = req.body;
-  if (!follower || !target) return res.status(400).json({ success: false, error: 'Missing info' });
 
-  const userA = await User.findOne({ email: follower });
-  const userB = await User.findOne({ email: target });
-  if (!userA || !userB) return res.status(404).json({ success: false, error: 'User not found' });
+  if (!follower || !target) {
+    return res.status(400).json({ error: 'Follower and target are required' });
+  }
 
-  if (!userA.following.includes(target)) userA.following.push(target);
-  if (!userB.followers.includes(follower)) userB.followers.push(follower);
+  const user = await User.findOne({ email: follower });
+  const targetUser = await User.findOne({ email: target });
 
-  await userA.save();
-  await userB.save();
+  if (!user || !targetUser) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  if (user.following.includes(targetUser._id)) {
+    user.following.pull(targetUser._id);
+    targetUser.followers.pull(user._id);
+  } else {
+    user.following.push(targetUser._id);
+    targetUser.followers.push(user._id);
+  }
+
+  await user.save();
+  await targetUser.save();
+
   res.json({ success: true });
 });
 
-// Trending jokes
+// Get Trending Jokes
 app.get('/trending', async (req, res) => {
-  const jokes = await Joke.find({ status: 'approved' }).sort({ createdAt: -1 }).limit(10);
-  const enriched = await Promise.all(jokes.map(async j => {
-    const user = await User.findOne({ email: j.email });
-    return {
-      name: user?.privacy?.name ? user.name : user.email,
-      joke: j.joke
-    };
-  }));
-  res.json({ success: true, jokes: enriched });
+  const jokes = await Joke.find({ status: 'approved' }).sort({ createdAt: -1 }).limit(5);
+  res.json({ success: true, jokes });
 });
 
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
