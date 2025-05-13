@@ -47,16 +47,12 @@ const Joke = mongoose.model('Joke', jokeSchema);
 app.post('/register', async (req, res) => {
   const { email, password } = req.body;
 
-  // Check if user already exists
   const existingUser = await User.findOne({ email });
   if (existingUser) {
     return res.status(400).json({ success: false, error: 'User already exists' });
   }
 
-  // Hash password before storing it
   const hashedPassword = await bcrypt.hash(password, 10);
-
-  // Create new user
   const newUser = new User({
     email,
     password: hashedPassword,
@@ -77,11 +73,9 @@ app.post('/register', async (req, res) => {
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
-  // Find the user
   const user = await User.findOne({ email });
   if (!user) return res.status(401).json({ success: false, error: 'Invalid credentials' });
 
-  // Compare the password
   const match = await bcrypt.compare(password, user.password);
   if (!match) return res.status(401).json({ success: false, error: 'Invalid credentials' });
 
@@ -91,7 +85,6 @@ app.post('/login', async (req, res) => {
 // Route: Submit Joke
 app.post('/submit', async (req, res) => {
   const { email, joke } = req.body;
-
   if (!email || !joke) {
     return res.status(400).json({ success: false, error: 'Email and joke are required' });
   }
@@ -109,109 +102,10 @@ app.post('/submit', async (req, res) => {
 // Route: Get Jokes
 app.get('/jokes', async (req, res) => {
   const email = req.query.email;
-
   if (!email) return res.status(400).json({ success: false, error: 'Email required' });
 
   const jokes = await Joke.find({ email, status: { $in: ['pending', 'approved'] } });
   res.json({ success: true, jokes });
-});
-
-// Route: Get User Profile
-app.get('/profile', async (req, res) => {
-  const email = req.query.email;
-
-  if (!email) return res.status(400).json({ success: false, error: 'Email required' });
-
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
-  const { name, location, dob, profilePicture, privacy } = user;
-  res.json({ success: true, name, location, dob, profilePicture, privacy });
-});
-
-// Route: Update User Profile
-app.post('/profile', async (req, res) => {
-  const { email, name, location, dob, profilePicture, privacy } = req.body;
-
-  if (!email) return res.status(400).json({ success: false, error: 'Email required' });
-
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
-  user.name = name || "";
-  user.location = location || "";
-  user.dob = dob || "";
-  user.profilePicture = profilePicture || "";
-  user.privacy = {
-    name: privacy?.name ?? true,
-    location: privacy?.location ?? true,
-    dob: privacy?.dob ?? false
-  };
-
-  await user.save();
-  res.json({ success: true });
-});
-
-// Route: Change Password
-app.post('/change-password', async (req, res) => {
-  const { email, currentPassword, newPassword } = req.body;
-
-  if (!email || !currentPassword || !newPassword) {
-    return res.status(400).json({ success: false, error: 'All fields required' });
-  }
-
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
-  const match = await bcrypt.compare(currentPassword, user.password);
-  if (!match) return res.status(401).json({ success: false, error: 'Incorrect current password' });
-
-  const hashed = await bcrypt.hash(newPassword, 10);
-  user.password = hashed;
-  await user.save();
-
-  res.json({ success: true });
-});
-
-// Route: Follow User
-app.post('/follow', async (req, res) => {
-  const { follower, target } = req.body;
-
-  if (!follower || !target) return res.status(400).json({ success: false, error: 'Both follower and target required' });
-
-  const followerUser = await User.findOne({ email: follower });
-  const targetUser = await User.findOne({ email: target });
-
-  if (!followerUser || !targetUser) return res.status(404).json({ success: false, error: 'User not found' });
-
-  // Add target to follower's following list and vice versa
-  if (!followerUser.following.includes(target)) {
-    followerUser.following.push(target);
-    await followerUser.save();
-  }
-
-  if (!targetUser.followers.includes(follower)) {
-    targetUser.followers.push(follower);
-    await targetUser.save();
-  }
-
-  res.json({ success: true });
-});
-
-// Route: Get Suggested Users to Follow
-app.get('/users/suggestions', async (req, res) => {
-  const email = req.query.email;
-
-  if (!email) return res.status(400).json({ success: false, error: 'Email required' });
-
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-
-  // Find users that the logged-in user isn't already following
-  const suggestedUsers = await User.find({ email: { $ne: email } });
-  const filteredSuggestions = suggestedUsers.filter(u => !user.following.includes(u.email));
-
-  res.json({ success: true, users: filteredSuggestions });
 });
 
 // Route: Moderator Approve Joke
@@ -238,6 +132,18 @@ app.post('/reject-joke', async (req, res) => {
   await joke.save();
 
   res.json({ success: true });
+});
+
+// Route: Get Profile
+app.get('/profile', async (req, res) => {
+  const email = req.query.email;
+  if (!email) return res.status(400).json({ success: false, error: 'Email required' });
+
+  const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+  const { name, location, dob, profilePicture, privacy } = user;
+  res.json({ success: true, name, location, dob, profilePicture, privacy });
 });
 
 app.listen(PORT, () => {
